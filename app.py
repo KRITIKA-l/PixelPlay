@@ -520,7 +520,7 @@ def open_in_visualizer(name):
 # ---------------------------------------------------------------- Visualizer view
 def sidebar_controls():
     with st.sidebar:
-        st.markdown('<div class="brand"><span>🎨</span>CG Visualizer</div><div class="sect">ALGORITHM</div>',
+        st.markdown('<div class="brand"><span>🎨</span>PixelPlay - CG Visualizer</div><div class="sect">ALGORITHM</div>',
                     unsafe_allow_html=True)
         ss().algo = st.selectbox("Choose an algorithm", ORDER, index=ORDER.index(ss().algo), key="algo_widget",
                                  format_func=lambda n: f"{ICONS[ALGO_INFO[n][0]]}  {n}", label_visibility="collapsed")
@@ -670,13 +670,13 @@ def overview():
 
 # ---------------------------------------------------------------- page
 def run_app():
-    st.set_page_config(page_title="CG Algorithm Visualizer", page_icon="🎨", layout="wide")
+    st.set_page_config(page_title="PixelPlay", page_icon="🎨", layout="wide")
     st.markdown(CSS, unsafe_allow_html=True)
     for key, value in {"algo": ORDER[0], "run": None, "run_id": 0, "cur": 0, "playing": False,
                        "inputs": {}, "detail": None}.items():
         ss().setdefault(key, value)
 
-    st.markdown(h(f'<div class="hero"><h1>Computer Graphics Algorithm Visualizer</h1>'
+    st.markdown(h(f'<div class="hero"><h1>PixelPlay - Computer Graphics Algorithm Visualizer</h1>'
                   f'<p>Watch line, circle, fill, clipping, transformation and curve algorithms run one step at a time, '
                   f'with every formula and decision explained.</p>'
                   f'<div class="stats"><span>{len(ORDER)} algorithms</span><span>{len(CATEGORIES)} categories</span>'
