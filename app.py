@@ -18,6 +18,18 @@ matplotlib.use("Agg")                      # no window: figures are only drawn i
 import streamlit as st
 import streamlit.components.v1 as components
 
+# Newer Streamlit versions print a warning for components.html and suggest st.iframe. The old call still works.
+# Set this to True to try st.iframe (needs a recent Streamlit); then check that "Full Screen" still opens.
+USE_NEW_IFRAME = False
+
+
+def embed_html(page, height):
+    """Show a small HTML page (the full-screen button) in an iframe."""
+    if USE_NEW_IFRAME and hasattr(st, "iframe"):
+        st.iframe(page, height=height)
+    else:
+        components.html(page, height=height, scrolling=False)
+
 from main import (N, CMAP, ORDER, ALGORITHMS, ALGO_INFO, ALGO_DOC, ALGO_EXTRA,
                   CATEGORY_COLORS, LEGEND, LEGEND_BY_CATEGORY, LEGEND_BY_ALGO, result_summary)
 
@@ -426,7 +438,7 @@ def fullscreen_graph(algo, run_id, steps, limits, start_index, speed_value):
  render();
 }})();
 </script></body></html>'''
-    components.html(component_html, height=52, scrolling=False)
+    embed_html(component_html, 52)
 
 def legend_html(algo):
     entries = LEGEND_BY_ALGO.get(algo) or LEGEND_BY_CATEGORY.get(ALGO_INFO[algo][0], LEGEND)
@@ -707,7 +719,7 @@ def run_app():
         ss().setdefault(key, value)
 
     st.markdown(h(f'<div class="hero"><h1>PixelPlay - Computer Graphics Algorithm Visualizer</h1>'
-                  f'<p>Watch line, circle, fill, clipping, transformation and curve algorithms run one step at a time, '
+                  f'<p>Watch line, circle, fill, clipping, transformation, curve, hidden-surface, image, shading and shadow algorithms run one step at a time, '
                   f'with every formula and decision explained.</p>'
                   f'<div class="stats"><span>{len(ORDER)} algorithms</span><span>{len(CATEGORIES)} categories</span>'
                   f'<span>step-by-step playback</span><span>live input</span></div></div>'),
