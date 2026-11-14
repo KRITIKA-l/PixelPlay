@@ -13,7 +13,7 @@ import textwrap
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, to_rgba
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib.widgets import Button, RadioButtons, Slider, TextBox
@@ -22,11 +22,22 @@ from algorithms import (dda_line, bresenham_line, midpoint_circle, bresenham_cir
                         boundary_fill, flood_fill, scanline_fill,
                         translation, scaling, rotation, reflection, composite, transform3d,
                         cohen_sutherland, cyrus_beck, sutherland_hodgman,
-                        bezier_curve, bspline_curve, hermite_curve)
+                        bezier_curve, bspline_curve, hermite_curve,
+                        zbuffer, backface_culling, area_subdivision, scanline_hsr, image_filter, image_geometry,
+                        illumination, shade_triangle, transparency, shadows)
 
 N = 30   # the canvas is an N x N pixel grid
 # colours: 0 empty, 1 boundary, 2 line/circle pixel, 3 filled pixel, 4 current step, 5 input point (end points / centre)
-CMAP = ListedColormap(["white", "black", "royalblue", "limegreen", "orange", "red"])
+PIXEL_NAMES = ["white", "black", "royalblue", "limegreen", "orange", "red"]
+CMAP = ListedColormap(PIXEL_NAMES)
+_RGBA = {}
+
+
+def pixel_rgba(c):
+    """A step colour is either one of the numbers 0-5 above or any colour string such as "#7f7f7f"."""
+    if c not in _RGBA:
+        _RGBA[c] = to_rgba(c if isinstance(c, str) else PIXEL_NAMES[int(c)])
+    return _RGBA[c]
 
 
 # ---------- reading the user's input ----------
@@ -88,6 +99,94 @@ def cube_3d(a, b):
     return transform3d((x, y, z), size, b)
 
 
+def scene(text):
+    """'x,y; x,y; x,y @ z | x,y; ... @ z'  ->  [(vertices, depth), ...]   (1 to 4 flat polygons, smaller z = nearer)"""
+    items = []
+    for part in text.split("|"):
+        if not part.strip():
+            continue
+        if "@" not in part:
+            raise ValueError("Each polygon needs a depth, like:  x,y; x,y; x,y @ z")
+        poly, z = part.split("@")
+        try:
+            depth = float(z)
+        except ValueError:
+            raise ValueError("The depth after @ must be a number")
+        items.append(([tuple(to_pixels(p)) for p in points(poly)], depth))
+    if not 1 <= len(items) <= 4:
+        raise ValueError("Enter 1 to 4 polygons separated by |")
+    return items
+
+
+def triangles(text):
+    """'x,y,z; x,y,z; x,y,z | ...'  ->  list of triangles (1 to 4)"""
+    tris = []
+    for part in text.split("|"):
+        if not part.strip():
+            continue
+        vs = [tuple(numbers(v, 3)) for v in part.split(";") if v.strip()]
+        if len(vs) != 3:
+            raise ValueError("Each triangle needs exactly 3 points:  x,y,z; x,y,z; x,y,z")
+        for x, y, z in vs:
+            in_canvas([x, y])
+        tris.append(tuple(vs))
+    if not 1 <= len(tris) <= 4:
+        raise ValueError("Enter 1 to 4 triangles separated by |")
+    return tris
+
+
+def cube_cull(a, b):
+    cx, cy, size = numbers(a, 3)
+    ry, rx = numbers(b, 2)
+    if size <= 0:
+        raise ValueError("The cube size must be greater than 0")
+    return backface_culling(cx, cy, size, ry, rx)
+
+
+def sphere(a, b):
+    xc, yc, r = to_pixels(numbers(a, 3))
+    if r < 3 or xc - r < 0 or yc - r < 0 or xc + r >= N or yc + r >= N:
+        raise ValueError("The sphere needs r >= 3 and must fit inside the grid")
+    parts = [p for p in b.split(";") if p.strip()]
+    if not 1 <= len(parts) <= 2:
+        raise ValueError("Light:  lx,ly,lz ; ka,kd,ks,n")
+    light = numbers(parts[0], 3)
+    if light == [0, 0, 0] or light[2] < 0:
+        raise ValueError("The light vector must not be zero and needs lz >= 0")
+    ka, kd, ks, n = numbers(parts[1], 4) if len(parts) == 2 else (0.2, 0.7, 0.6, 20)
+    if not all(0 <= k <= 1 for k in (ka, kd, ks)) or n < 1:
+        raise ValueError("ka, kd, ks must be between 0 and 1 and n >= 1")
+    return illumination(xc, yc, r, tuple(light), ka, kd, ks, n)
+
+
+def shading(method):
+    def run(a, b):
+        tri = [tuple(to_pixels(p)) for p in points(a)]
+        if len(tri) != 3:
+            raise ValueError("Enter exactly 3 points like: x,y; x,y; x,y")
+        light = numbers(b, 3)
+        if light == [0, 0, 0] or light[2] < 0:
+            raise ValueError("The light vector must not be zero and needs lz >= 0")
+        return shade_triangle(tri, tuple(light), method)
+    return run
+
+
+def transparency_run(a, b):
+    polys = [[tuple(to_pixels(p)) for p in points(part)] for part in a.split("|") if part.strip()]
+    if len(polys) != 2:
+        raise ValueError("Enter 2 polygons separated by |  (back polygon | front polygon)")
+    (alpha,) = numbers(b, 1)
+    if not 0 <= alpha <= 1:
+        raise ValueError("Alpha must be between 0 and 1")
+    return transparency(polys[0], polys[1], alpha)
+
+
+def shadow_run(a, b):
+    poly = [tuple(to_pixels(p)) for p in points(a)]
+    lx, ly = in_canvas(numbers(b, 2))
+    return shadows(poly, (lx, ly))
+
+
 # ---------- one entry per algorithm: labels, default inputs, function ----------
 ALGORITHMS = {
     "DDA": ("Line: x1,y1,x2,y2", "3,2,25,13", "", "",
@@ -132,6 +231,25 @@ ALGORITHMS = {
                        lambda a, b: bspline_curve(curve_points(a, 4))),
     "Hermite Curve": ("Points P1; P4: x,y; x,y", "4,6;24,6", "Tangents R1; R4: x,y; x,y", "10,24;10,-24",
                       hermite),
+    # ----- Unit 6: hidden surface removal, image manipulation, illumination, shading, shadows, transparency -----
+    "Z-Buffer": ("Triangles: x,y,z; x,y,z; x,y,z | ...", "4,4,6; 16,6,6; 8,16,6 | 6,8,1; 18,10,10; 10,20,10", "", "",
+                 lambda a, b: zbuffer(triangles(a))),
+    "Back-Face Culling": ("Cube: cx,cy,size", "15,15,10", "Rotate: ry,rx (degrees)", "35,25", cube_cull),
+    "Area Subdivision": ("Polygons: x,y; ... @ z | ...", "5,5;19,5;12,19 @ 3 | 10,10;25,10;25,25;10,25 @ 6", "", "",
+                         lambda a, b: area_subdivision(scene(a))),
+    "Scanline HSR": ("Polygons: x,y; ... @ z | ...", "5,5;19,5;12,19 @ 3 | 10,10;25,10;25,25;10,25 @ 6", "", "",
+                     lambda a, b: scanline_hsr(scene(a))),
+    "Image Filtering": ("Filter: mean gaussian median sobelx negative ...", "median", "Image: noise edge gradient dot", "noise",
+                        lambda a, b: image_filter(a, b)),
+    "Image Transform": ("Ops: T x y; S x y; R angle; F line", "R 30", "Image: letter noise edge gradient", "letter",
+                        lambda a, b: image_geometry(a, b)),
+    "Phong Illumination": ("Sphere: xc,yc,r", "15,15,10", "Light x,y,z ; ka,kd,ks,n", "-1,1,1; 0.2,0.7,0.6,20", sphere),
+    "Flat Shading": ("Triangle: x,y; x,y; x,y", "5,4;25,8;12,26", "Light: x,y,z", "0,0,1", shading("flat")),
+    "Gouraud Shading": ("Triangle: x,y; x,y; x,y", "5,4;25,8;12,26", "Light: x,y,z", "0,0,1", shading("gouraud")),
+    "Phong Shading": ("Triangle: x,y; x,y; x,y", "5,4;25,8;12,26", "Light: x,y,z", "0,0,1", shading("phong")),
+    "Transparency": ("Back | front: x,y; ... | x,y; ...", "4,4;20,4;20,20;4,20 | 12,10;27,12;15,27", "Alpha (0 to 1)", "0.5",
+                     transparency_run),
+    "Shadows": ("Object (side view): x,y; x,y; ...", "10,6;16,6;16,12;10,12", "Light: x,y", "4,26", shadow_run),
 }
 
 # the order of the radio list and of the Overview cards (follows the syllabus)
@@ -139,7 +257,11 @@ ORDER = ["DDA", "Bresenham", "Midpoint Circle", "Bresenham Circle", "Polar Circl
          "Scanline Fill", "Boundary Fill", "Flood Fill",
          "Translation", "Scaling", "Rotation", "Reflection", "2D Composite", "3D Transform",
          "Cohen-Sutherland", "Cyrus-Beck", "Sutherland-Hodgman",
-         "Bezier Curve", "B-Spline Curve", "Hermite Curve"]
+         "Bezier Curve", "B-Spline Curve", "Hermite Curve",
+         "Z-Buffer", "Back-Face Culling", "Area Subdivision", "Scanline HSR",
+         "Image Filtering", "Image Transform",
+         "Phong Illumination", "Flat Shading", "Gouraud Shading", "Phong Shading",
+         "Transparency", "Shadows"]
 ALGORITHMS = {name: ALGORITHMS[name] for name in ORDER}
 
 # ---------- text shown on each algorithm's page and on its Overview card ----------
@@ -440,9 +562,175 @@ ALGO_EXTRA = {
                       "When end points and end slopes are known."),
 }
 
+ALGO_INFO.update({
+    "Z-Buffer": ("Hidden surface",
+                 "Keeps a depth value for every pixel and draws a surface only where it is nearer than what is already there.",
+                 "z < zbuffer[x][y]: draw and store z. Polygons can be drawn in any order."),
+    "Back-Face Culling": ("Hidden surface",
+                          "Removes faces that look away from the viewer using the sign of N . V.",
+                          "N . V <= 0 means back face: skip it. Removes about half the faces of a closed solid."),
+    "Area Subdivision": ("Hidden surface",
+                         "Warnock: cuts the window into quarters until each region is simple enough to paint.",
+                         "Disjoint, surrounding, intersecting or contained decides if a region is finished or cut again."),
+    "Scanline HSR": ("Hidden surface",
+                     "Resolves visibility one scan line at a time: where spans overlap, the nearest polygon wins.",
+                     "Cut the line at span ends; in every part show the polygon with the smallest z."),
+    "Image Filtering": ("Image processing",
+                        "Changes a grey image with a 3 x 3 window (blur, sharpen, edges, median) or per-pixel operations.",
+                        "Each output pixel is a weighted sum of its 3 x 3 neighbourhood; the median uses the sorted values."),
+    "Image Transform": ("Image processing",
+                        "Rotates, scales, translates or reflects an image with inverse mapping.",
+                        "For every result pixel find its source pixel with M^-1, so no holes appear."),
+    "Phong Illumination": ("Illumination & shading",
+                           "Computes the brightness of a surface point from ambient, diffuse and specular light.",
+                           "I = ka + kd (N.L) + ks (R.V)^n: base level, 3-D shape and shiny highlight."),
+    "Flat Shading": ("Illumination & shading",
+                     "Gives a whole polygon one intensity computed from its face normal.",
+                     "Cheapest method, but every facet is visible as a separate patch."),
+    "Gouraud Shading": ("Illumination & shading",
+                        "Computes the intensity at the vertices and interpolates it across the polygon.",
+                        "Smooth shading, but a highlight inside the polygon can be missed."),
+    "Phong Shading": ("Illumination & shading",
+                      "Interpolates the surface normal across the polygon and computes the intensity per pixel.",
+                      "Best quality: highlights appear inside the polygon; costs one lighting calculation per pixel."),
+    "Transparency": ("Shadows & transparency",
+                     "Blends a transparent polygon with whatever is behind it.",
+                     "C = alpha C_front + (1 - alpha) C_behind; the drawing order matters."),
+    "Shadows": ("Shadows & transparency",
+                "Projects an object from a point light onto the ground to find its shadow.",
+                "Extend the ray light -> vertex until it reaches y = 0; the shadow lies between the extreme hits."),
+})
+ALGO_DOC.update({
+    "Z-Buffer": [
+        (0, "1.  Frame buffer = background colour,   z-buffer = infinity for every pixel"),
+        (0, "2.  For each polygon (in any order):"),
+        (1, "a.  For every pixel (x, y) inside the polygon:"),
+        (2, "z = depth of the polygon at (x, y)      (from its plane  z = a x + b y + c)"),
+        (2, "If z < zbuffer[x][y]:   frame[x][y] = polygon colour,   zbuffer[x][y] = z"),
+        (0, "3.  Display the frame buffer"),
+        (0, "4.  Along a scan line the depth changes by a constant:  z(x + 1) = z(x) + a"),
+    ],
+    "Back-Face Culling": [
+        (0, "1.  For every face take its outward normal   N = (v1 - v0) x (v2 - v1)"),
+        (0, "2.  V = vector from the face to the viewer   (0, 0, 1) for a viewer on the +z axis"),
+        (0, "3.  If N . V <= 0:   back face -> remove it"),
+        (0, "4.  Otherwise the face is front-facing -> keep and draw it"),
+        (0, "5.  Exact for one convex solid; with several or concave objects a real hidden surface method is still needed"),
+    ],
+    "Area Subdivision": [
+        (0, "1.  Start with the whole window as one region"),
+        (0, "2.  Compare the region with every polygon: disjoint, surrounding, contained or intersecting"),
+        (0, "3.  The region is finished when:"),
+        (1, "a.  all polygons are disjoint:   fill with the background"),
+        (1, "b.  only one polygon touches it:   background, then paint that polygon's part"),
+        (1, "c.  a surrounding polygon is in front of all the others:   fill the region with it"),
+        (0, "4.  Otherwise cut the region into 4 quarters and repeat steps 2-4 for each quarter"),
+        (0, "5.  A region of one pixel: show the nearest polygon"),
+    ],
+    "Scanline HSR": [
+        (0, "1.  For every scan line y:"),
+        (1, "a.  Find the span [x_start, x_end] of every polygon on this line (as in the scan-line fill)"),
+        (1, "b.  Cut the line wherever a span starts or ends"),
+        (1, "c.  In every part, the polygon with the smallest z is visible"),
+        (1, "d.  Fill the part with that polygon's colour"),
+        (0, "2.  Only the current line has to be resolved, no full-screen depth buffer is needed"),
+    ],
+    "Image Filtering": [
+        (0, "1.  The image is a grid of grey values f(x, y), 0 (black) ... 255 (white)"),
+        (0, "2.  For every pixel that has a full 3 x 3 window:"),
+        (1, "a.  g(x, y) = ( sum of kernel(i, j) * f(x + i, y + j) ) / divisor"),
+        (1, "b.  Round and clamp g to 0..255"),
+        (0, "3.  Kernels:  mean = all 1 / 9;   Gaussian = 1 2 1 / 2 4 2 / 1 2 1 / 16;   Sobel;   Laplacian;   sharpen"),
+        (0, "4.  Median filter: sort the 9 values and take the 5th"),
+        (0, "5.  Point operations change each pixel alone:  negative 255 - v,  brightness v + 60,  threshold"),
+        (0, "6.  The border ring is copied unchanged"),
+    ],
+    "Image Transform": [
+        (0, "1.  Build the 3 x 3 matrix of the operations and apply it about the image centre c:"),
+        (1, "M = T(c) . M_ops . T(-c)"),
+        (0, "2.  For every RESULT pixel (u', v'):"),
+        (1, "a.  (u, v) = M^-1 (u', v')     the point it comes from"),
+        (1, "b.  Round to the nearest source pixel"),
+        (1, "c.  Inside the image: copy its grey value.   Outside: black"),
+        (0, "3.  Inverse mapping leaves no holes, unlike pushing source pixels forward"),
+    ],
+    "Phong Illumination": [
+        (0, "1.  N = unit surface normal,   L = unit vector to the light,   V = unit vector to the viewer"),
+        (0, "2.  Ambient:   I_a = ka"),
+        (0, "3.  Diffuse:   I_d = kd * max(0, N . L)"),
+        (0, "4.  Mirror direction:   R = 2 (N . L) N - L"),
+        (0, "5.  Specular:   I_s = ks * max(0, R . V)^n"),
+        (0, "6.  I = I_a + I_d + I_s     (clamped to 0..1)"),
+    ],
+    "Flat Shading": [
+        (0, "1.  Compute the polygon's normal N"),
+        (0, "2.  Compute one intensity I from N with the illumination model"),
+        (0, "3.  Fill every pixel of the polygon with I"),
+        (0, "4.  Fast, but the edges between neighbouring polygons are visible"),
+    ],
+    "Gouraud Shading": [
+        (0, "1.  Compute the intensity at every vertex (from the vertex normals)"),
+        (0, "2.  For every scan line:"),
+        (1, "a.  Interpolate I along the two edges the line crosses:  I_L, I_R"),
+        (1, "b.  I(x) = I_L + (I_R - I_L)(x - x_L) / (x_R - x_L)"),
+        (0, "3.  Smooth, cheap, but a highlight that is not at a vertex is lost"),
+    ],
+    "Phong Shading": [
+        (0, "1.  Keep a normal at every vertex"),
+        (0, "2.  For every scan line:"),
+        (1, "a.  Interpolate the normal along the two edges:  N_L, N_R"),
+        (1, "b.  N(x) = N_L + (N_R - N_L)(x - x_L) / (x_R - x_L),  then make it unit length"),
+        (1, "c.  Compute the intensity at the pixel from N(x) with the illumination model"),
+        (0, "3.  Highlights appear correctly, but there is a full lighting calculation per pixel"),
+    ],
+    "Transparency": [
+        (0, "1.  alpha = opacity of the front polygon (1 = opaque, 0 = invisible)"),
+        (0, "2.  Draw the opaque back polygon first"),
+        (0, "3.  For every pixel of the transparent polygon and each of R, G, B:"),
+        (1, "C = alpha * C_front + (1 - alpha) * C_behind"),
+        (0, "4.  Draw transparent polygons back to front: the result depends on the order"),
+    ],
+    "Shadows": [
+        (0, "1.  Light at L = (Lx, Ly); ground is the line y = 0"),
+        (0, "2.  For every vertex P = (Px, Py) of the object:"),
+        (1, "a.  t = Ly / (Ly - Py)   (where the ray from L through P reaches y = 0)"),
+        (1, "b.  x' = Lx + (Px - Lx) * t"),
+        (0, "3.  The shadow is the part of the ground between the smallest and the largest x'"),
+        (0, "4.  Other methods: shadow volumes, shadow maps (depth image seen from the light)"),
+    ],
+})
+ALGO_EXTRA.update({
+    "Z-Buffer": ("O(P) per polygon for P covered pixels; extra memory = one z per pixel.",
+                 "Hardware rendering: simple, any polygon order, handles intersecting surfaces."),
+    "Back-Face Culling": ("O(F): one dot product per face. Removes about half of the faces.",
+                          "First step before any other method, for closed convex solids."),
+    "Area Subdivision": ("Depends on the scene: simple areas end quickly, edges cost many small regions.",
+                         "Scenes with large uniform areas; a divide-and-conquer approach."),
+    "Scanline HSR": ("O(H x P) for H lines and P polygons. Memory for only one line.",
+                     "Polygon scenes; extends the scan-line fill, no big depth buffer."),
+    "Image Filtering": ("O(pixels x 9) for a 3 x 3 window (median adds a sort of 9 values).",
+                        "Noise removal (median, mean), blur, sharpening, edge detection."),
+    "Image Transform": ("O(pixels): one matrix product and one lookup per result pixel.",
+                        "Rotating or scaling pictures; use bilinear sampling for better quality."),
+    "Phong Illumination": ("O(1) per point: a few dot products and one power.",
+                           "Any shiny surface; the base of all shading methods."),
+    "Flat Shading": ("O(1) lighting calculation per polygon.",
+                     "Fast previews or deliberately faceted looks."),
+    "Gouraud Shading": ("Lighting at vertices only, then linear interpolation per pixel.",
+                        "Smooth surfaces when speed matters more than highlights."),
+    "Phong Shading": ("Lighting at every pixel plus a normalisation.",
+                      "High-quality shiny surfaces."),
+    "Transparency": ("O(1) per covered pixel (3 multiplies per colour).",
+                     "Glass, water, smoke: draw after all opaque objects, back to front."),
+    "Shadows": ("O(V) for projecting V vertices (planar shadow).",
+                "Shadows on a flat ground; use shadow maps or volumes for general scenes."),
+})
+
 CATEGORY_COLORS = {"Line drawing": "#3b6fd4", "Circle drawing": "#7e4fc2",
                    "Region filling": "#2f9a45", "Clipping": "#d9702a",
-                   "Transformation": "#c2417a", "Curves": "#0f8b8d"}
+                   "Transformation": "#c2417a", "Curves": "#0f8b8d",
+                   "Hidden surface": "#a8571d", "Image processing": "#5f8a1f",
+                   "Illumination & shading": "#b8860b", "Shadows & transparency": "#4a5568"}
 
 # ---------- legend entries: (text, colour, "box" for a pixel / "line" for a drawn line) ----------
 LEGEND = [("Boundary / outline", "black", "box"), ("Line / circle / shape pixel", "royalblue", "box"),
@@ -467,12 +755,57 @@ LEGEND_BY_ALGO = {
                      ("Circle pixel", "royalblue", "box"), ("Quadrant dividers", "mediumpurple", "line")],
 }
 
+_poly_legend = [("Polygon A", "#e4572e", "box"), ("Polygon B", "#2e86de", "box"), ("Polygon C", "#2ca02c", "box")]
+_gray_legend = [("Dark pixel", "#303030", "box"), ("Light pixel", "#e6e6e6", "box")]
+LEGEND_BY_ALGO.update({
+    "Z-Buffer": _poly_legend + [("Pixel being tested", "orange", "line"), ("Failed the z test", "gray", "line")],
+    "Back-Face Culling": [("Face being tested", "orange", "line"), ("Normal vector", "purple", "line"),
+                          ("Front face (visible)", "green", "line"), ("Back face (hidden)", "red", "line")],
+    "Area Subdivision": _poly_legend + [("Region being examined", "orange", "line"), ("Regions done", "lightgray", "line")],
+    "Scanline HSR": _poly_legend + [("Current scan line", "orange", "line")],
+    "Image Filtering": _gray_legend + [("3 x 3 window / output pixel", "orange", "line")],
+    "Image Transform": _gray_legend + [("Source pixel -> result pixel", "orange", "line")],
+    "Phong Illumination": _gray_legend + [("Sample point", "orange", "line"), ("Sphere outline", "lightgray", "line")],
+    "Flat Shading": _gray_legend + [("Current scan line", "orange", "line")],
+    "Gouraud Shading": _gray_legend + [("Current scan line", "orange", "line")],
+    "Phong Shading": _gray_legend + [("Current scan line", "orange", "line"), ("Vertex normal", "purple", "line")],
+    "Transparency": [("Back polygon", "#2e86de", "box"), ("Front over white", "#f5b9a8", "box"),
+                     ("Front over back (blend)", "#8e5a96", "box")],
+    "Shadows": [("Ground", "#c8c8c8", "box"), ("Shadow", "#555555", "box"), ("Light source", "red", "box"),
+                ("Object", "blue", "line"), ("Light ray", "orange", "line")],
+})
+
 TAB_ON, TAB_OFF = "#bcd4ff", "0.85"
+
+
+def drawn_pixels(steps):
+    """Every pixel that the steps draw (pixels with their own colour included; the red input marker is not counted)."""
+    seen = {p for st in steps if st.get("color") != 5 for p in st.get("pixels", [])}
+    seen.update((x, y) for st in steps for x, y, c in st.get("cells", ()))
+    return seen
 
 
 def result_summary(algo, steps):
     """(text, colour) for the final step: Accepted / Rejected, 'Filled X pixels' or 'X pixels plotted'."""
     last = steps[-1]["text"]
+    if algo in ("Z-Buffer", "Area Subdivision", "Scanline HSR"):
+        return f"Scene rendered ({len(drawn_pixels(steps))} visible pixels)", "darkgreen"
+    if algo == "Back-Face Culling":
+        m = re.search(r"Done: (\d+) of 6", last)
+        return f"{m.group(1) if m else 0} of 6 faces visible", "darkgreen"
+    if algo == "Image Filtering":
+        return "Filter applied", "darkgreen"
+    if algo == "Image Transform":
+        return "Image transformed", "darkgreen"
+    if algo == "Phong Illumination":
+        return "Sphere shaded", "darkgreen"
+    if algo in ("Flat Shading", "Gouraud Shading", "Phong Shading"):
+        return f"Polygon shaded ({len(drawn_pixels(steps))} pixels)", "darkgreen"
+    if algo == "Transparency":
+        return "Blending complete", "darkgreen"
+    if algo == "Shadows":
+        m = re.search(r"shadow length = ([\d.]+)", last)
+        return f"Shadow length {m.group(1) if m else '?'} pixels", "darkgreen"
     if ALGO_INFO[algo][0] == "Transformation":
         return "Transformation complete", "darkgreen"
     if algo in ("Cohen-Sutherland", "Cyrus-Beck"):
@@ -886,6 +1219,10 @@ class App:
     def view_limits(self):
         """((x_lo, x_hi), (y_lo, y_hi)) of the visible grid. Normally the N x N canvas; for transformations it grows
         so that results at negative or large coordinates (e.g. a reflection about the x-axis) stay visible."""
+        for st in self.steps:
+            if "view" in st:                      # an algorithm may ask for a zoomed view (e.g. 8 x 8 images)
+                x_lo, x_hi, y_lo, y_hi = st["view"]
+                return (x_lo, x_hi), (y_lo, y_hi)
         x_lo = y_lo = 0
         x_hi = y_hi = N - 1
         if ALGO_INFO[self.algo][0] == "Transformation":
@@ -909,17 +1246,21 @@ class App:
             return
 
         # build the pixel grid from every step up to the current one
-        grid = np.zeros((N, N))
+        grid = np.ones((N, N, 4))                    # RGBA picture, white at the start
         for step in self.steps[: self.i + 1]:
+            colour = pixel_rgba(step.get("color", 2))
             for x, y in step.get("pixels", []):
                 if 0 <= x < N and 0 <= y < N:
-                    grid[y][x] = step.get("color", 2)
+                    grid[y][x] = colour
+            for x, y, c in step.get("cells", ()):    # pixels that have their own colour
+                if 0 <= x < N and 0 <= y < N:
+                    grid[y][x] = pixel_rgba(c)
         for x, y in self.steps[self.i].get("pixels", []):
             if 0 <= x < N and 0 <= y < N and self.steps[self.i].get("highlight", True):
-                grid[y][x] = 4                       # highlight the current step
+                grid[y][x] = pixel_rgba(4)           # highlight the current step
 
         (x_lo, x_hi), (y_lo, y_hi) = self.view_limits()
-        ax.imshow(grid, cmap=CMAP, vmin=0, vmax=5, origin="lower", extent=(-0.5, N - 0.5, -0.5, N - 0.5))
+        ax.imshow(grid, origin="lower", extent=(-0.5, N - 0.5, -0.5, N - 0.5))
         ax.set_xticks(range(x_lo, x_hi + 1, max(1, -(-(x_hi - x_lo + 1) // 40))))
         ax.set_yticks(range(y_lo, y_hi + 1, max(1, -(-(y_hi - y_lo + 1) // 40))))
         ax.set_xticks(np.arange(x_lo - 0.5, x_hi + 1, 1), minor=True)
@@ -937,6 +1278,16 @@ class App:
             ys = [p[1] for p in pts] + ([pts[0][1]] if closed else [])
             ax.plot(xs, ys, color=color, linewidth=shape[3] if len(shape) > 3 else 2,
                     linestyle=shape[4] if len(shape) > 4 else "-")
+        labels = self.steps[self.i].get("labels", ())
+        if labels:                                   # text inside cells (numbers of an image, depths ...)
+            pos = ax.get_position()
+            cell_pt = min(pos.width * self.fig.get_figwidth() / (x_hi - x_lo + 1),
+                          pos.height * self.fig.get_figheight() / (y_hi - y_lo + 1)) * 72
+            for lab in labels:
+                text = str(lab[2])
+                colour = lab[3] if len(lab) > 3 and lab[3] else "black"
+                size = lab[4] if len(lab) > 4 and lab[4] else min(0.55, 1.5 / max(1, len(text)))
+                ax.text(lab[0], lab[1], text, ha="center", va="center", color=colour, fontsize=size * cell_pt)
         ax.set_xlim(x_lo - 0.5, x_hi + 0.5)
         ax.set_ylim(y_lo - 0.5, y_hi + 0.5)
         ax.set_title(f"{self.algo}  -  step {self.i + 1} / {len(self.steps)}", fontsize=self.fs(12))

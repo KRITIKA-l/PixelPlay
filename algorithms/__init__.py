@@ -12,3 +12,14 @@ from .line_clipping import cohen_sutherland
 from .cyrus_beck import cyrus_beck
 from .polygon_clipping import sutherland_hodgman
 from .curves import bezier_curve, bspline_curve, hermite_curve
+# Unit 6: hidden surfaces, images, illumination, shading, shadows
+from .zbuffer import zbuffer
+from .backface import backface_culling
+from .area_subdivision import area_subdivision
+from .scanline_hsr import scanline_hsr
+from .image_filter import image_filter
+from .image_geometry import image_geometry
+from .illumination import illumination
+from .shading import shade_triangle
+from .transparency import transparency
+from .shadows import shadows

@@ -24,7 +24,9 @@ from main import (N, CMAP, ORDER, ALGORITHMS, ALGO_INFO, ALGO_DOC, ALGO_EXTRA,
 CATEGORIES = list(dict.fromkeys(ALGO_INFO[n][0] for n in ORDER))
 
 ICONS = {"Line drawing": "📏", "Circle drawing": "⭕", "Region filling": "🪣",
-         "Clipping": "✂️", "Transformation": "🔄", "Curves": "〰️"}
+         "Clipping": "✂️", "Transformation": "🔄", "Curves": "〰️",
+         "Hidden surface": "👁️", "Image processing": "🖼️", "Illumination & shading": "💡",
+         "Shadows & transparency": "🌗"}
 
 CSS = """
 <style>
@@ -137,6 +139,10 @@ def chip(category):
 # ---------------------------------------------------------------- drawing (same picture as the desktop version)
 def view_limits(algo, steps):
     """Visible grid. Normally N x N; transformations grow it so results at negative / large coordinates stay visible."""
+    for stp in steps:
+        if "view" in stp:                                      # an algorithm may ask for a zoomed view (8 x 8 images)
+            x_lo, x_hi, y_lo, y_hi = stp["view"]
+            return (x_lo, x_hi), (y_lo, y_hi)
     x_lo = y_lo = 0
     x_hi = y_hi = N - 1
     if ALGO_INFO[algo][0] == "Transformation":
@@ -148,6 +154,21 @@ def view_limits(algo, steps):
                     x_lo, x_hi = min(x_lo, int(math.floor(x)) - 1), max(x_hi, int(math.ceil(x)) + 1)
                     y_lo, y_hi = min(y_lo, int(math.floor(y)) - 1), max(y_hi, int(math.ceil(y)) + 1)
     return (x_lo, x_hi), (y_lo, y_hi)
+
+
+def colour_of(c):
+    """A step colour is a number 0-5 or any CSS colour string (e.g. "#7f7f7f")."""
+    return c if isinstance(c, str) else PIXEL_COLOURS[int(c)]
+
+
+def step_pixels(stp):
+    """Every in-canvas pixel a step draws (plain pixels and pixels with their own colour)."""
+    for x, y in stp.get("pixels", ()):
+        if 0 <= x < N and 0 <= y < N:
+            yield (x, y)
+    for x, y, c in stp.get("cells", ()):
+        if 0 <= x < N and 0 <= y < N:
+            yield (x, y)
 
 
 PIXEL_COLOURS = list(CMAP.colors)               # 0 empty, 1 boundary, 2 line/circle, 3 filled, 4 current step, 5 input point
@@ -180,6 +201,9 @@ def render_svg(algo, steps, i, limits):
         for x, y in stp.get("pixels", ()):
             if 0 <= x < N and 0 <= y < N:
                 cells[(x, y)] = colour
+        for x, y, c in stp.get("cells", ()):                   # pixels that have their own colour
+            if 0 <= x < N and 0 <= y < N:
+                cells[(x, y)] = c
     now = steps[i]
     if now.get("highlight", True):                              # current step in orange
         for x, y in now.get("pixels", ()):
@@ -188,14 +212,14 @@ def render_svg(algo, steps, i, limits):
 
     by_colour = {}
     for (x, y), c in cells.items():
-        if c:
+        if c or isinstance(c, str):
             by_colour.setdefault(c, []).append(f"M{f1(ml + (x - x_lo) * cs)} {f1(mt + (y_hi - y) * cs)}"
                                                f"h{f1(cs)}v{f1(cs)}h-{f1(cs)}z")
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {f1(vw)} {f1(vh)}" '
            f'font-family="Helvetica, Arial, sans-serif"><rect width="{f1(vw)}" height="{f1(vh)}" fill="#fff"/>',
            f'<clipPath id="c"><rect x="{f1(ml)}" y="{f1(mt)}" width="{f1(pw)}" height="{f1(ph)}"/></clipPath>']
     for c, parts in by_colour.items():
-        out.append(f'<path d="{"".join(parts)}" fill="{PIXEL_COLOURS[int(c)]}"/>')
+        out.append(f'<path d="{"".join(parts)}" fill="{colour_of(c)}"/>')
 
     grid = [f"M{f1(ml + k * cs)} {f1(mt)}v{f1(ph)}" for k in range(W + 1)] + \
            [f"M{f1(ml)} {f1(mt + k * cs)}h{f1(pw)}" for k in range(H + 1)]
@@ -215,6 +239,12 @@ def render_svg(algo, steps, i, limits):
         tag = "polygon" if closed else "polyline"
         out.append(f'<{tag} points="{coords}" stroke="{colour}" stroke-width="{width:.1f}"{dash}/>')
     out.append("</g>")
+    for lab in now.get("labels", ()):                           # text inside cells (image values, depths ...)
+        text = str(lab[2])
+        colour = lab[3] if len(lab) > 3 and lab[3] else "#1f2430"
+        fsz = (lab[4] if len(lab) > 4 and lab[4] else min(0.55, 1.5 / max(1, len(text)))) * cs
+        out.append(f'<text x="{f1(X(lab[0]))}" y="{f1(Y(lab[1]) + fsz * 0.35)}" text-anchor="middle" font-size="{f1(fsz)}" '
+                   f'font-weight="600" fill="{colour}">{html.escape(text)}</text>')
     out.append(f'<rect x="{f1(ml)}" y="{f1(mt)}" width="{f1(pw)}" height="{f1(ph)}" fill="none" stroke="#9aa3b5" '
                f'stroke-width="1"/>')
 
@@ -246,7 +276,7 @@ def build_frames(algo, run_id, _steps, _limits):
     counts, seen = [], set()
     for stp in _steps:
         if stp.get("color") != 5:
-            seen.update((x, y) for x, y in stp.get("pixels", []) if 0 <= x < N and 0 <= y < N)
+            seen.update(step_pixels(stp))
         counts.append(len(seen))
     details = [info_html(algo, _steps, i, counts[i]) for i in range(len(_steps))]
     return (json.dumps(frames).replace("</", "<\\/"), json.dumps(details).replace("</", "<\\/"))
@@ -418,7 +448,7 @@ def pixel_count(steps, i):
     for stp in steps[: i + 1]:
         if stp.get("color") == 5:                               # the red input marker is not a plotted pixel
             continue
-        seen.update((x, y) for x, y in stp.get("pixels", []) if 0 <= x < N and 0 <= y < N)
+        seen.update(step_pixels(stp))
     return len(seen)
 
 
@@ -435,7 +465,7 @@ def info_html(algo, steps, i, count=None):
         text, result_colour = result_summary(algo, steps)
         result = f'<div class="result" style="color:{result_colour}">{esc(text)}</div>'
     bar_colour = "#1b7f3b" if last else colour
-    has_pixels = any(stp.get("pixels") for stp in steps)
+    has_pixels = any(stp.get("pixels") or stp.get("cells") for stp in steps)
     tile2 = (f'<div class="tile"><small>PIXELS DRAWN</small><b>{pixel_count(steps, i) if count is None else count}</b></div>' if has_pixels
              else f'<div class="tile"><small>TYPE</small><b style="font-size:.95rem">{esc(category)}</b></div>')
     return (h(f'<div class="panel" style="--accent:{colour}"><div class="phead">{pill}'
@@ -520,7 +550,7 @@ def open_in_visualizer(name):
 # ---------------------------------------------------------------- Visualizer view
 def sidebar_controls():
     with st.sidebar:
-        st.markdown('<div class="brand"><span>🎨</span>PixelPlay - CG Visualizer</div><div class="sect">ALGORITHM</div>',
+        st.markdown('<div class="brand"><span>🎨</span>PixelPlay -CG Visualizer</div><div class="sect">ALGORITHM</div>',
                     unsafe_allow_html=True)
         ss().algo = st.selectbox("Choose an algorithm", ORDER, index=ORDER.index(ss().algo), key="algo_widget",
                                  format_func=lambda n: f"{ICONS[ALGO_INFO[n][0]]}  {n}", label_visibility="collapsed")
@@ -670,7 +700,7 @@ def overview():
 
 # ---------------------------------------------------------------- page
 def run_app():
-    st.set_page_config(page_title="PixelPlay", page_icon="🎨", layout="wide")
+    st.set_page_config(page_title="CG Algorithm Visualizer", page_icon="🎨", layout="wide")
     st.markdown(CSS, unsafe_allow_html=True)
     for key, value in {"algo": ORDER[0], "run": None, "run_id": 0, "cur": 0, "playing": False,
                        "inputs": {}, "detail": None}.items():
