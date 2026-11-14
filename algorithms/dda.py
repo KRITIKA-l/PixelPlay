@@ -15,6 +15,16 @@ def dda_line(x1, y1, x2, y2):
     y_inc = dy / length
     x, y = x1, y1
 
+    # first step: mark BOTH end points so it is clear which line is going to be drawn
+    steps.append({
+        "pixels": [(x1, y1), (x2, y2)],
+        "color": 5,
+        "highlight": False,
+        "text": (f"Input: the line to draw\nStart pixel ({x1}, {y1}) and end pixel ({x2}, {y2}) are marked in red.\n"
+                 f"dx = {dx}, dy = {dy}, length = max(|dx|, |dy|) = {length}\n"
+                 "The line is now drawn from the start to the end.")
+    })
+
     for i in range(length + 1):
         px = math.floor(x + 0.5)          # round half up
         py = math.floor(y + 0.5)

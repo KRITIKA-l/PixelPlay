@@ -17,7 +17,7 @@ def cohen_sutherland(x1, y1, x2, y2, win):
     window = ([(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)], "red", True)
     c1, c2 = region_code(x1, y1, win), region_code(x2, y2, win)
     original = ([(x1, y1), (x2, y2)], "lightgray", False)
-    steps = [{"text": f"Original line\nP1=({x1},{y1}) code={c1:04b}\nP2=({x2},{y2}) code={c2:04b}\n(bits: Top Bottom Right Left)",
+    steps = [{"text": f"Original line\nP1=({x1:g},{y1:g}) code={c1:04b}\nP2=({x2:g},{y2:g}) code={c2:04b}\n(bits: Top Bottom Right Left)",
               "shapes": [window, ([(x1, y1), (x2, y2)], "blue", False)]}]
 
     while True:

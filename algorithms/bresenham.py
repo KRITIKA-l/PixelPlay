@@ -1,5 +1,6 @@
-def bresenham_line(x1, y1, x2, y2):
-    """Bresenham line drawing (all slopes). Returns a list of steps."""
+def bresenham_line(x1, y1, x2, y2, show_ends=True):
+    """Bresenham line drawing (all slopes). Returns a list of steps.
+    The first step marks both end points (show_ends=False leaves that step out)."""
     steps = []
     dx = abs(x2 - x1)
     dy = abs(y2 - y1)
@@ -8,6 +9,16 @@ def bresenham_line(x1, y1, x2, y2):
     x, y = x1, y1
     error = dx - dy
     k = 0
+
+    if show_ends:
+        steps.append({
+            "pixels": [(x1, y1), (x2, y2)],
+            "color": 5,
+            "highlight": False,
+            "text": (f"Input: the line to draw\nStart pixel ({x1}, {y1}) and end pixel ({x2}, {y2}) are marked in red.\n"
+                     f"dx = {dx}, dy = {dy}, sx = {sx}, sy = {sy}, error = dx - dy = {error}\n"
+                     "The line is now drawn from the start to the end.")
+        })
 
     while True:
         e2 = 2 * error
@@ -37,6 +48,6 @@ def polygon_outline(polygon):
     for i in range(len(polygon)):
         x1, y1 = polygon[i]
         x2, y2 = polygon[(i + 1) % len(polygon)]
-        for s in bresenham_line(x1, y1, x2, y2):
+        for s in bresenham_line(x1, y1, x2, y2, show_ends=False):
             pixels += s["pixels"]
     return pixels
